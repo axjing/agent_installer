@@ -1,0 +1,14 @@
+﻿{
+    "activeProvider":  "anthropic-official",
+    "npmRegistry":  "https://registry.npmjs.org/",
+    "npmMirrors":  {
+                       "official":  "https://registry.npmjs.org/",
+                       "npmmirror":  "https://registry.npmmirror.com/",
+                       "tencent":  "https://mirrors.cloud.tencent.com/npm/"
+                   },
+    "autoSyncEnv":  true,
+    "syncScope":  "User",
+    "installedAgents":  [
+
+                        ]
+}

@@ -1,0 +1,151 @@
+{
+  "providers": {
+    "anthropic-official": {
+      "id": "anthropic-official",
+      "name": "Anthropic Official",
+      "description": "Anthropic 官方 API 直连",
+      "claudeCode": {
+        "baseUrl": "https://api.anthropic.com",
+        "env": {
+          "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+        }
+      },
+      "openaiCodex": {
+        "baseUrl": "https://api.anthropic.com/v1",
+        "env": {}
+      },
+      "openclaw": {
+        "gatewayUrl": "https://api.anthropic.com"
+      },
+      "piAgent": {
+        "provider": "anthropic",
+        "baseUrl": "https://api.anthropic.com"
+      }
+    },
+    "openai-official": {
+      "id": "openai-official",
+      "name": "OpenAI Official",
+      "description": "OpenAI 官方 API 直连",
+      "claudeCode": {
+        "baseUrl": "https://api.openai.com/v1",
+        "env": {
+          "ANTHROPIC_BASE_URL": "https://api.openai.com/v1"
+        }
+      },
+      "openaiCodex": {
+        "baseUrl": "https://api.openai.com/v1",
+        "env": {
+          "OPENAI_BASE_URL": "https://api.openai.com/v1"
+        }
+      },
+      "openclaw": {
+        "gatewayUrl": "https://api.openai.com/v1"
+      },
+      "piAgent": {
+        "provider": "openai",
+        "baseUrl": "https://api.openai.com/v1"
+      }
+    },
+    "deepseek": {
+      "id": "deepseek",
+      "name": "DeepSeek (深度求索)",
+      "description": "DeepSeek 官方 API (兼容 OpenAI 规范，支持 V3/R1)",
+      "claudeCode": {
+        "baseUrl": "https://api.deepseek.com",
+        "env": {
+          "ANTHROPIC_BASE_URL": "https://api.deepseek.com"
+        }
+      },
+      "openaiCodex": {
+        "baseUrl": "https://api.deepseek.com/v1",
+        "model": "deepseek-coder",
+        "env": {
+          "OPENAI_BASE_URL": "https://api.deepseek.com/v1"
+        }
+      },
+      "openclaw": {
+        "gatewayUrl": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat"
+      },
+      "piAgent": {
+        "provider": "openai-compatible",
+        "baseUrl": "https://api.deepseek.com/v1",
+        "model": "deepseek-coder"
+      }
+    },
+    "siliconflow": {
+      "id": "siliconflow",
+      "name": "SiliconFlow (硅基流动)",
+      "description": "SiliconFlow 一站式大模型推理服务",
+      "claudeCode": {
+        "baseUrl": "https://api.siliconflow.cn/v1",
+        "env": {
+          "ANTHROPIC_BASE_URL": "https://api.siliconflow.cn/v1"
+        }
+      },
+      "openaiCodex": {
+        "baseUrl": "https://api.siliconflow.cn/v1",
+        "model": "deepseek-ai/DeepSeek-V3",
+        "env": {
+          "OPENAI_BASE_URL": "https://api.siliconflow.cn/v1"
+        }
+      },
+      "openclaw": {
+        "gatewayUrl": "https://api.siliconflow.cn/v1"
+      },
+      "piAgent": {
+        "provider": "openai-compatible",
+        "baseUrl": "https://api.siliconflow.cn/v1",
+        "model": "deepseek-ai/DeepSeek-V3"
+      }
+    },
+    "openrouter": {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "description": "全球主流大模型统一聚合路由网关",
+      "claudeCode": {
+        "baseUrl": "https://openrouter.ai/api",
+        "env": {
+          "ANTHROPIC_BASE_URL": "https://openrouter.ai/api"
+        }
+      },
+      "openaiCodex": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "env": {
+          "OPENAI_BASE_URL": "https://openrouter.ai/api/v1"
+        }
+      },
+      "openclaw": {
+        "gatewayUrl": "https://openrouter.ai/api/v1"
+      },
+      "piAgent": {
+        "provider": "openrouter",
+        "baseUrl": "https://openrouter.ai/api/v1"
+      }
+    },
+    "custom-relay": {
+      "id": "custom-relay",
+      "name": "Custom OneAPI / NewAPI",
+      "description": "用户自建 OneAPI / NewAPI / 代理中转节点",
+      "claudeCode": {
+        "baseUrl": "http://localhost:3000/v1",
+        "env": {
+          "ANTHROPIC_BASE_URL": "http://localhost:3000/v1"
+        }
+      },
+      "openaiCodex": {
+        "baseUrl": "http://localhost:3000/v1",
+        "env": {
+          "OPENAI_BASE_URL": "http://localhost:3000/v1"
+        }
+      },
+      "openclaw": {
+        "gatewayUrl": "http://localhost:3000/v1"
+      },
+      "piAgent": {
+        "provider": "openai-compatible",
+        "baseUrl": "http://localhost:3000/v1"
+      }
+    }
+  }
+}
