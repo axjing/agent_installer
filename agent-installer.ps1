@@ -50,6 +50,7 @@ Ensure-ExecutionPolicy
 # 1. 运行 Doctor 诊断
 if ($Doctor) {
     Write-Info "正在执行系统健康与环境诊断..."
+    Repair-NpmEnvironment
     $prereq = Get-PrerequisitesStatus
     $cc = Get-CCSwitchStatus
     $agentList = Get-AllAgentStatus
@@ -214,6 +215,7 @@ while ($true) {
         }
         "5" {
             Write-Info "运行环境 Doctor 诊断与自愈修复..."
+            Repair-NpmEnvironment
             $prereq = Get-PrerequisitesStatus
             if (-not $prereq.NodeInstalled) {
                 Write-WarnMsg "Node.js 未检测到，正在启动多通道自动自愈安装..."

@@ -141,6 +141,7 @@ namespace AgentInstaller
                 {
                     FileName = "powershell.exe",
                     Arguments = argBuilder.ToString(),
+                    WorkingDirectory = targetDir,
                     UseShellExecute = false
                 };
 

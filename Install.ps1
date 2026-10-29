@@ -25,8 +25,9 @@ Import-Module (Join-Path $ModulesPath "ConfigManager.psm1") -DisableNameChecking
 Show-Banner
 Write-Info ">>> 正在启动 agent-installer 初始化部署向导..."
 
-# 1. 确保权限与策略
+# 1. 确保权限与策略并自愈 npm 环境
 Ensure-ExecutionPolicy
+Repair-NpmEnvironment
 
 # 2. 检查基础环境
 $prereqs = Get-PrerequisitesStatus

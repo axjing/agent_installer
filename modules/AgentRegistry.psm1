@@ -2,6 +2,7 @@
 # AI Agent 注册表与生命周期管理模块
 
 Import-Module (Join-Path $PSScriptRoot "UI.psm1") -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot "Prerequisites.psm1") -DisableNameChecking
 
 $script:SupportedAgents = @{
     "openclaw" = @{
@@ -81,10 +82,15 @@ function Get-AgentInfo {
             }
         }
     } catch {
-        # 若直接运行报错，尝试查 npm list -g
+        # 若直接运行报错，尝试安全调用 npm list -g
         try {
-            $npmListRaw = & npm list -g --depth=0 $meta.PackageName.Split('@')[0] 2>$null
-            if ($npmListRaw -match "@(\d+\.\d+\.\d+[\w\.\-]*)") {
+            $pkgTarget = $meta.PackageName.Split('@')[0]
+            if ($meta.PackageName.StartsWith("@")) {
+                $parts = $meta.PackageName.Split('@')
+                $pkgTarget = "@" + $parts[1]
+            }
+            $npmListRaw = Invoke-NpmSafe -Arguments @("list", "-g", "--depth=0", $pkgTarget)
+            if ($npmListRaw -and ($npmListRaw -match "@(\d+\.\d+\.\d+[\w\.\-]*)")) {
                 $installed = $true
                 $version = $matches[1]
             }
@@ -122,6 +128,9 @@ function Install-AgentPackage {
         return $false
     }
 
+    # 1. 自动执行环境自检与修复 (清除桌面 .npmrc 或损坏 npm.cmd 干扰)
+    Repair-NpmEnvironment
+
     $agent = $script:SupportedAgents[$AgentKey]
     Write-Info "正在全局安装 $($agent.DisplayName) ($($agent.PackageName))..."
 
@@ -134,33 +143,21 @@ function Install-AgentPackage {
     }
 
     try {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = "npm.cmd"
-        # 若找不到 npm.cmd 则回退到 npm
-        $npmCmd = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
-        if (-not $npmCmd) {
-            $psi.FileName = "npm"
-        }
-        $psi.Arguments = $installArgs -join " "
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.UseShellExecute = $false
-        $psi.CreateNoWindow = $true
+        # 使用安全沙箱隔离通道执行 npm，强制工作目录在系统 TEMP，杜绝向上寻址桌面 node_modules
+        $res = Invoke-NpmSafe -Arguments $installArgs -WorkingDirectory $env:TEMP -ReturnProcessResult
 
-        $proc = [System.Diagnostics.Process]::Start($psi)
-        $stdout = $proc.StandardOutput.ReadToEnd()
-        $stderr = $proc.StandardError.ReadToEnd()
-        $proc.WaitForExit()
-
-        if ($proc.ExitCode -eq 0) {
+        if ($res.ExitCode -eq 0) {
             Write-Success "$($agent.DisplayName) 安装成功！"
-            Write-Log -Message "[$($agent.Key)] 安装成功: $stdout" -Level "SUCCESS"
+            Write-Log -Message "[$($agent.Key)] 安装成功: $($res.Stdout)" -Level "SUCCESS"
             return $true
         } else {
-            Write-ErrorMsg "$($agent.DisplayName) 安装遇到非零退出代码 ($($proc.ExitCode))。"
-            if ($stderr) {
-                Write-WarnMsg "错误信息: $stderr"
-                Write-Log -Message "[$($agent.Key)] 错误: $stderr" -Level "ERROR"
+            Write-ErrorMsg "$($agent.DisplayName) 安装遇到非零退出代码 ($($res.ExitCode))。"
+            if ($res.Stderr) {
+                Write-WarnMsg "错误信息: $($res.Stderr)"
+                Write-Log -Message "[$($agent.Key)] 错误: $($res.Stderr)" -Level "ERROR"
+            }
+            if ($res.Stdout -and ($res.Stdout -match "npm error|ERR!")) {
+                Write-WarnMsg "输出信息: $($res.Stdout)"
             }
             return $false
         }
@@ -190,9 +187,14 @@ function Uninstall-AgentPackage {
 
     Write-Info "正在卸载全局包: $pkgClean ($($agent.DisplayName))..."
     try {
-        $output = & npm uninstall -g $pkgClean 2>&1
-        Write-Success "$($agent.DisplayName) 卸载命令执行完毕。"
-        return $true
+        $res = Invoke-NpmSafe -Arguments @("uninstall", "-g", $pkgClean) -ReturnProcessResult
+        if ($res.ExitCode -eq 0) {
+            Write-Success "$($agent.DisplayName) 卸载命令执行完毕。"
+            return $true
+        } else {
+            Write-WarnMsg "卸载遇到警告: $($res.Stderr)"
+            return $true
+        }
     } catch {
         Write-ErrorMsg "卸载遇到错误: $_"
         return $false

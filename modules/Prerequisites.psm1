@@ -12,6 +12,194 @@ function Refresh-EnvironmentVariables {
     Write-Info "已实时刷新当前会话环境变量 PATH"
 }
 
+function Get-NpmExecutionTarget {
+    <#
+    .SYNOPSIS
+        解析安全、合法的 npm 执行器，彻底免疫桌面异常 npm.cmd 或模块找不到的污染
+    #>
+    $target = @{
+        Executable    = $null
+        PrefixArgs    = @()
+        IsDirectNode  = $false
+        SourcePath    = $null
+    }
+
+    # 1. 优先通道：尝试使用 node.exe 直连官方自带的 npm-cli.js (最稳固，免疫所有批处理污染)
+    try {
+        $nodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
+        if ($nodeCmd) {
+            $nodeExe = $nodeCmd.Source
+            $nodeDir = Split-Path $nodeExe
+            
+            $candidateCliPaths = @(
+                (Join-Path $nodeDir "node_modules\npm\bin\npm-cli.js"),
+                (Join-Path $nodeDir "..\node_modules\npm\bin\npm-cli.js"),
+                (Join-Path $nodeDir "node_modules\corepack\dist\npm.js")
+            )
+
+            foreach ($cli in $candidateCliPaths) {
+                if (Test-Path $cli) {
+                    $target.Executable   = $nodeExe
+                    $target.PrefixArgs   = @($cli)
+                    $target.IsDirectNode = $true
+                    $target.SourcePath   = $cli
+                    return $target
+                }
+            }
+        }
+    } catch {}
+
+    # 2. 备用通道：扫描官方标准安装目录中的 npm.cmd (严格排除 Desktop / Downloads 伪装文件)
+    $candidateNpmCmds = @(
+        (Join-Path $env:ProgramFiles "nodejs\npm.cmd"),
+        (Join-Path ${env:ProgramFiles(x86)} "nodejs\npm.cmd"),
+        (Join-Path $env:LOCALAPPDATA "Programs\nodejs\npm.cmd"),
+        (Join-Path $env:APPDATA "npm\npm.cmd")
+    )
+
+    foreach ($nCmd in $candidateNpmCmds) {
+        if ($nCmd -and (Test-Path $nCmd)) {
+            $target.Executable   = $nCmd
+            $target.PrefixArgs   = @()
+            $target.IsDirectNode = $false
+            $target.SourcePath   = $nCmd
+            return $target
+        }
+    }
+
+    # 3. 最终回退：系统 PATH 命令查找（过滤掉桌面路径）
+    try {
+        $foundCmds = Get-Command "npm.cmd", "npm" -ErrorAction SilentlyContinue
+        foreach ($fc in $foundCmds) {
+            $src = $fc.Source
+            # 严重拦截：若路径包含 Desktop、Downloads 等临时目录，坚决不用！
+            if ($src -notmatch "Desktop|Downloads|Temp") {
+                $target.Executable   = $src
+                $target.PrefixArgs   = @()
+                $target.IsDirectNode = $false
+                $target.SourcePath   = $src
+                return $target
+            }
+        }
+    } catch {}
+
+    return $target
+}
+
+function Invoke-NpmSafe {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+        [string]$WorkingDirectory = $env:TEMP,
+        [switch]$ReturnProcessResult
+    )
+
+    $target = Get-NpmExecutionTarget
+    if (-not $target.Executable) {
+        Write-ErrorMsg "未找到合法的 npm 或 Node.js 执行程序！"
+        if ($ReturnProcessResult) {
+            return @{ ExitCode = 1; Stdout = ""; Stderr = "npm not found" }
+        }
+        return $null
+    }
+
+    # 组装最终参数列表
+    $fullArgs = @()
+    if ($target.PrefixArgs) {
+        $fullArgs += $target.PrefixArgs
+    }
+    $fullArgs += $Arguments
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $target.Executable
+    $psi.Arguments = $fullArgs -join " "
+    # 强制将 WorkingDirectory 隔离在 TEMP 或指定安全目录，避免从桌面寻找 node_modules
+    $psi.WorkingDirectory = if ($WorkingDirectory -and (Test-Path $WorkingDirectory)) { $WorkingDirectory } else { $env:TEMP }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $stdout = $proc.StandardOutput.ReadToEnd()
+        $stderr = $proc.StandardError.ReadToEnd()
+        $proc.WaitForExit()
+
+        if ($ReturnProcessResult) {
+            return @{
+                ExitCode = $proc.ExitCode
+                Stdout   = $stdout
+                Stderr   = $stderr
+            }
+        }
+
+        if ($proc.ExitCode -eq 0) {
+            return $stdout
+        } else {
+            return $null
+        }
+    } catch {
+        if ($ReturnProcessResult) {
+            return @{
+                ExitCode = 1
+                Stdout   = ""
+                Stderr   = $_.Exception.Message
+            }
+        }
+        return $null
+    }
+}
+
+function Repair-NpmEnvironment {
+    <#
+    .SYNOPSIS
+        自动检测并修复因桌面上存在损坏 npm.cmd 或 ~/.npmrc 路径被污染导致的问题
+    #>
+    Write-Info "正在自检与优化 npm 环境配置..."
+
+    # 1. 检测用户主目录下的 .npmrc 是否被错误配置为 Desktop
+    $userNpmrc = Join-Path $env:USERPROFILE ".npmrc"
+    if (Test-Path $userNpmrc) {
+        try {
+            $lines = Get-Content $userNpmrc -Encoding UTF8 -ErrorAction SilentlyContinue
+            $modified = $false
+            $newLines = @()
+            foreach ($line in $lines) {
+                if ($line -match "^\s*prefix\s*=\s*(.*)") {
+                    $val = $matches[1].Trim().Trim('"').Trim("'")
+                    if ($val -match "Desktop|桌面") {
+                        Write-WarnMsg "检测到 ~/.npmrc 中的 prefix 错误指向了桌面: $val，正在自动修复为标准目录..."
+                        $stdNpmDir = Join-Path $env:APPDATA "npm"
+                        $newLines += "prefix=$stdNpmDir"
+                        $modified = $true
+                        continue
+                    }
+                }
+                $newLines += $line
+            }
+            if ($modified) {
+                [System.IO.File]::WriteAllLines($userNpmrc, $newLines, [System.Text.Encoding]::UTF8)
+                Write-Success "已成功修复 ~/.npmrc 中的全局 prefix 配置！"
+            }
+        } catch {
+            Write-WarnMsg "检查 ~/.npmrc 时遇到警告: $_"
+        }
+    }
+
+    # 2. 检查桌面是否存在伪装/损坏的 npm.cmd
+    $desktopPaths = @(
+        (Join-Path $env:USERPROFILE "Desktop\npm.cmd"),
+        (Join-Path $env:USERPROFILE "Desktop\npm"),
+        (Join-Path $env:USERPROFILE "Desktop\node_modules\npm")
+    )
+    foreach ($dp in $desktopPaths) {
+        if (Test-Path $dp) {
+            Write-WarnMsg "警告: 检测到桌面存在异常文件/目录: $dp，可能导致 Node.js 错误加载！已通过安全沙箱隔离保护安装流程。"
+        }
+    }
+}
+
 function Get-PrerequisitesStatus {
     $status = @{
         NodeInstalled = $false
@@ -37,14 +225,21 @@ function Get-PrerequisitesStatus {
         }
     } catch {}
 
-    # 2. 检查 npm
+    # 2. 检查 npm (通过安全通道探测，免疫桌面污染)
     try {
-        $npmCmd = Get-Command "npm" -ErrorAction SilentlyContinue
-        if ($npmCmd) {
-            $npmVerRaw = (& npm -v) 2>$null
-            if ($npmVerRaw -match "(\d+\.\d+\.\d+)") {
-                $status.NpmInstalled = $true
-                $status.NpmVersion = $matches[1]
+        $npmVerRaw = Invoke-NpmSafe -Arguments @("-v")
+        if ($npmVerRaw -and ($npmVerRaw -match "(\d+\.\d+\.\d+)")) {
+            $status.NpmInstalled = $true
+            $status.NpmVersion = $matches[1]
+        } else {
+            # 回退直接查 Get-Command
+            $npmCmd = Get-Command "npm" -ErrorAction SilentlyContinue
+            if ($npmCmd) {
+                $raw = (& npm -v) 2>$null
+                if ($raw -match "(\d+\.\d+\.\d+)") {
+                    $status.NpmInstalled = $true
+                    $status.NpmVersion = $matches[1]
+                }
             }
         }
     } catch {}
@@ -65,9 +260,9 @@ function Get-PrerequisitesStatus {
     $npmGlobalDir = Join-Path $env:APPDATA "npm"
     if ($status.NpmInstalled) {
         try {
-            $prefix = (& npm config get prefix) 2>$null
-            if ($prefix -and (Test-Path $prefix)) {
-                $npmGlobalDir = $prefix.Trim()
+            $prefixOut = Invoke-NpmSafe -Arguments @("config", "get", "prefix")
+            if ($prefixOut -and ($prefixOut.Trim() -notmatch "Desktop|桌面") -and (Test-Path $prefixOut.Trim())) {
+                $npmGlobalDir = $prefixOut.Trim()
             }
         } catch {}
     }
@@ -294,11 +489,12 @@ function Install-NodeJsWithWinget {
 
 function Get-NpmRegistry {
     try {
-        $registry = (& npm config get registry) 2>$null
-        return $registry.Trim()
-    } catch {
-        return "https://registry.npmjs.org/"
-    }
+        $regOut = Invoke-NpmSafe -Arguments @("config", "get", "registry")
+        if ($regOut) {
+            return $regOut.Trim()
+        }
+    } catch {}
+    return "https://registry.npmjs.org/"
 }
 
 function Set-NpmRegistry {
@@ -308,9 +504,14 @@ function Set-NpmRegistry {
     )
 
     try {
-        & npm config set registry $RegistryUrl
-        Write-Success "已成功将 npm 镜像源切换为: $RegistryUrl"
-        return $true
+        $res = Invoke-NpmSafe -Arguments @("config", "set", "registry", $RegistryUrl) -ReturnProcessResult
+        if ($res.ExitCode -eq 0) {
+            Write-Success "已成功将 npm 镜像源切换为: $RegistryUrl"
+            return $true
+        } else {
+            Write-ErrorMsg "切换 npm 镜像源遇到非零返回: $($res.Stderr)"
+            return $false
+        }
     } catch {
         Write-ErrorMsg "切换 npm 镜像源失败: $_"
         return $false
@@ -327,4 +528,4 @@ function Ensure-ExecutionPolicy {
     } catch {}
 }
 
-Export-ModuleMember -Function Get-PrerequisitesStatus, Repair-NpmGlobalPath, Install-NodeJsAuto, Install-NodeJsWithWinget, Refresh-EnvironmentVariables, Get-NpmRegistry, Set-NpmRegistry, Ensure-ExecutionPolicy
+Export-ModuleMember -Function Get-PrerequisitesStatus, Repair-NpmGlobalPath, Install-NodeJsAuto, Install-NodeJsWithWinget, Refresh-EnvironmentVariables, Get-NpmRegistry, Set-NpmRegistry, Ensure-ExecutionPolicy, Get-NpmExecutionTarget, Invoke-NpmSafe, Repair-NpmEnvironment
