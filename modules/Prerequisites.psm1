@@ -103,16 +103,27 @@ function Invoke-NpmSafe {
         return $null
     }
 
-    # 组装最终参数列表
+    # 组装最终参数列表，对所有含空格的路径/参数严格做双引号安全包裹 (防止 C:\Program Files 截断为 C:\Program)
     $fullArgs = @()
     if ($target.PrefixArgs) {
         $fullArgs += $target.PrefixArgs
     }
     $fullArgs += $Arguments
 
+    $safeArgs = @()
+    foreach ($arg in $fullArgs) {
+        if ([string]::IsNullOrEmpty($arg)) { continue }
+        $aStr = $arg.ToString()
+        if ($aStr.Contains(" ") -and -not ($aStr.StartsWith('"') -and $aStr.EndsWith('"'))) {
+            $safeArgs += "`"$aStr`""
+        } else {
+            $safeArgs += $aStr
+        }
+    }
+
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $target.Executable
-    $psi.Arguments = $fullArgs -join " "
+    $psi.Arguments = $safeArgs -join " "
     # 强制将 WorkingDirectory 隔离在 TEMP 或指定安全目录，避免从桌面寻找 node_modules
     $psi.WorkingDirectory = if ($WorkingDirectory -and (Test-Path $WorkingDirectory)) { $WorkingDirectory } else { $env:TEMP }
     $psi.RedirectStandardOutput = $true

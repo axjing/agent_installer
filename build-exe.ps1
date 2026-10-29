@@ -130,10 +130,10 @@ namespace AgentInstaller
                 StringBuilder argBuilder = new StringBuilder();
                 argBuilder.Append("-NoLogo -ExecutionPolicy Bypass -NoProfile -File \"" + mainScript + "\"");
 
-                // 透传外部参数
+                // 透传外部参数并严格保证含空格参数的引号包裹
                 foreach (string arg in args)
                 {
-                    if (arg.Contains(" "))
+                    if (arg.Contains(" ") && !arg.StartsWith("\""))
                     {
                         argBuilder.Append(" \"" + arg + "\"");
                     }

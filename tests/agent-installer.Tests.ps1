@@ -67,6 +67,12 @@ Describe "4. Prerequisites and Self-healing" {
         $ok = Ensure-AllPrerequisites
         $ok | Should Be $true
     }
+
+    It "Invoke-NpmSafe executes safely without Space Delimiter Path Truncation" {
+        $res = Invoke-NpmSafe -Arguments @("-v") -ReturnProcessResult
+        $res.ExitCode | Should Be 0
+        $res.Stdout | Should Not BeNullOrEmpty
+    }
 }
 
 Describe "5. Unified Routing and Configuration Injection" {
