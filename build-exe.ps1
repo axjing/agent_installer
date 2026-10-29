@@ -63,6 +63,8 @@ $zipBytes = [System.IO.File]::ReadAllBytes($zipPath)
 $base64Payload = [System.Convert]::ToBase64String($zipBytes)
 Write-Host "[+] 核心源码与配置封装完成 (压缩后: $([math]::Round($zipBytes.Length / 1KB, 1)) KB)" -ForegroundColor Green
 
+$buildId = (Get-Date).Ticks.ToString()
+
 # 4. 生成嵌入式 C# 启动器源码
 $csSourcePath = Join-Path $tempBuildDir "Launcher.cs"
 $csCode = @"
@@ -76,8 +78,9 @@ namespace AgentInstaller
 {
     class Program
     {
-        // 嵌入的混淆压缩 Payload 数据
+        // 嵌入的混淆压缩 Payload 数据与唯一构建版本标识
         private static readonly string EncodedPayload = "$base64Payload";
+        private static readonly string BuildId = "$buildId";
 
         static int Main(string[] args)
         {
@@ -89,10 +92,10 @@ namespace AgentInstaller
                 // 解包运行目录位于用户 LocalAppData 下，安全且无需提权
                 string targetDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "agent-installer-runtime");
                 string mainScript = Path.Combine(targetDir, "agent-installer.ps1");
-                string versionMarker = Path.Combine(targetDir, ".version_$(Get-Random)");
+                string versionMarker = Path.Combine(targetDir, ".build_" + BuildId);
 
-                // 若未解包或需要刷新，则进行内存解包
-                if (!Directory.Exists(targetDir) || !File.Exists(mainScript))
+                // 若未解包或版本发生更新，则自动进行内存解包覆盖
+                if (!Directory.Exists(targetDir) || !File.Exists(mainScript) || !File.Exists(versionMarker))
                 {
                     if (Directory.Exists(targetDir))
                     {
@@ -118,6 +121,9 @@ namespace AgentInstaller
                             }
                         }
                     }
+
+                    // 写入本次版本标记
+                    try { File.WriteAllText(versionMarker, BuildId); } catch {}
                 }
 
                 // 组装 PowerShell 执行命令，彻底绕过 ExecutionPolicy

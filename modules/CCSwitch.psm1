@@ -1,15 +1,9 @@
 ﻿# modules/CCSwitch.psm1
-# CC Switch (farion1231/cc-switch) 集成、检测与安装管理模块
+# CC Switch (farion1231/cc-switch) 集成、五重全域智能检测与生命周期管理模块
 
 Import-Module (Join-Path $PSScriptRoot "UI.psm1") -DisableNameChecking
 
 $script:CCSwitchRepo = "farion1231/cc-switch"
-$script:PossibleExePaths = @(
-    (Join-Path $env:LOCALAPPDATA "Programs\cc-switch\CC Switch.exe"),
-    (Join-Path $env:ProgramFiles "CC Switch\CC Switch.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "CC Switch\CC Switch.exe"),
-    (Join-Path $env:USERPROFILE "AppData\Local\cc-switch\CC Switch.exe")
-)
 
 function Get-CCSwitchConfigDir {
     $dir = Join-Path $env:USERPROFILE ".cc-switch"
@@ -17,6 +11,126 @@ function Get-CCSwitchConfigDir {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
     return $dir
+}
+
+function Find-CCSwitchExecutable {
+    <#
+    .SYNOPSIS
+        在任何 Windows 10+ 机器上全域检索 CC Switch 可执行文件路径
+        支持进程、PATH、开始菜单/桌面快捷方式解析、注册表 Uninstall 项及常用矩阵扫描
+    #>
+
+    # 1. 进程探针（若正在运行，直接精确定位运行中实例的绝对路径）
+    try {
+        $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "cc.*switch|^cc-switch$" }
+        foreach ($p in $procs) {
+            if ($p.Path -and (Test-Path $p.Path)) {
+                return $p.Path
+            }
+        }
+    } catch {}
+
+    # 2. PATH 环境变量探针
+    $cmdCandidates = @("cc-switch.exe", "cc-switch", "CC Switch.exe", "CC Switch", "ccswitch.exe")
+    foreach ($cand in $cmdCandidates) {
+        try {
+            $cmd = Get-Command $cand -ErrorAction SilentlyContinue
+            if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
+                return $cmd.Source
+            }
+        } catch {}
+    }
+
+    # 3. 开始菜单与桌面快捷方式解析探针 (覆盖用户自定义盘符与任意安装路径)
+    $shortcutDirs = @(
+        (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"),
+        (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs"),
+        (Join-Path $env:USERPROFILE "Desktop"),
+        (Join-Path $env:PUBLIC "Desktop")
+    )
+
+    try {
+        $wsh = New-Object -ComObject WScript.Shell
+        foreach ($sDir in $shortcutDirs) {
+            if (-not (Test-Path $sDir)) { continue }
+            $lnks = Get-ChildItem -Path $sDir -Filter "*.lnk" -Recurse -ErrorAction SilentlyContinue | Where-Object {
+                $_.Name -match "cc.*switch|ccswitch"
+            }
+            foreach ($lnk in $lnks) {
+                try {
+                    $target = $wsh.CreateShortcut($lnk.FullName).TargetPath
+                    if ($target -and (Test-Path $target) -and ($target.EndsWith(".exe"))) {
+                        return $target
+                    }
+                } catch {}
+            }
+        }
+    } catch {}
+
+    # 4. Windows 注册表 Uninstall 卸载信息探针 (覆盖 64位/32位/当前用户)
+    $regPaths = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    try {
+        $installedApps = Get-ItemProperty $regPaths -ErrorAction SilentlyContinue | Where-Object {
+            $_.DisplayName -match "CC Switch|cc-switch|ccswitch" -or $_.PSChildName -match "cc-switch|CC Switch"
+        }
+        foreach ($app in $installedApps) {
+            # 从 DisplayIcon 提取（通常指向 exe）
+            if ($app.DisplayIcon) {
+                $iconPath = $app.DisplayIcon.Trim('"').Split(',')[0]
+                if ($iconPath.EndsWith(".exe") -and (Test-Path $iconPath)) {
+                    return $iconPath
+                }
+            }
+            # 从 InstallLocation 递归查找 exe
+            if ($app.InstallLocation -and (Test-Path $app.InstallLocation)) {
+                $exe = Get-ChildItem -Path $app.InstallLocation -Filter "*.exe" -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Name -match "cc.*switch" } | Select-Object -First 1
+                if ($exe) {
+                    return $exe.FullName
+                }
+            }
+        }
+    } catch {}
+
+    # 5. 全盘常用安装目录与二进制命名矩阵扫描 (涵盖空格与连字符的全部排列)
+    $baseDirs = @(
+        $env:LOCALAPPDATA,
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)},
+        $env:APPDATA,
+        "C:", "D:", "E:"
+    )
+    $subDirs = @(
+        "Programs\CC Switch",
+        "Programs\cc-switch",
+        "CC Switch",
+        "cc-switch"
+    )
+    $exeNames = @(
+        "cc-switch.exe",
+        "CC Switch.exe",
+        "ccswitch.exe"
+    )
+
+    foreach ($b in $baseDirs) {
+        if (-not $b -or -not (Test-Path $b)) { continue }
+        foreach ($s in $subDirs) {
+            $folder = Join-Path $b $s
+            if (-not (Test-Path $folder)) { continue }
+            foreach ($e in $exeNames) {
+                $candidate = Join-Path $folder $e
+                if (Test-Path $candidate) {
+                    return $candidate
+                }
+            }
+        }
+    }
+
+    return $null
 }
 
 function Get-CCSwitchStatus {
@@ -27,23 +141,13 @@ function Get-CCSwitchStatus {
         HasConfig = $false
     }
 
-    # 1. 检查环境变量命令
-    $cmd = Get-Command "cc-switch" -ErrorAction SilentlyContinue
-    if ($cmd) {
+    $foundPath = Find-CCSwitchExecutable
+    if ($foundPath) {
         $result.Installed = $true
-        $result.Path = $cmd.Source
-    } else {
-        # 2. 检查常见安装绝对路径
-        foreach ($p in $script:PossibleExePaths) {
-            if ($p -and (Test-Path $p)) {
-                $result.Installed = $true
-                $result.Path = $p
-                break
-            }
-        }
+        $result.Path      = $foundPath
     }
 
-    # 3. 检查配置目录状态
+    # 检查配置目录与数据库
     if (Test-Path (Join-Path $result.ConfigDir "cc-switch.db")) {
         $result.HasConfig = $true
     }
@@ -116,7 +220,7 @@ function Install-CCSwitch {
         Start-Sleep -Seconds 2
         $newStatus = Get-CCSwitchStatus
         if ($newStatus.Installed) {
-            Write-Success "CC Switch 安装成功！"
+            Write-Success "CC Switch 安装成功！路径: $($newStatus.Path)"
             return $true
         } else {
             Write-Info "已执行安装包，若为交互式安装，请完成安装向导即可。"
@@ -131,7 +235,7 @@ function Install-CCSwitch {
 function Start-CCSwitchApp {
     $status = Get-CCSwitchStatus
     if ($status.Installed -and (Test-Path $status.Path)) {
-        Write-Info "正在拉起 CC Switch 客户端..."
+        Write-Info "正在拉起 CC Switch 客户端 ($($status.Path))..."
         Start-Process -FilePath $status.Path
         return $true
     } else {
@@ -140,4 +244,4 @@ function Start-CCSwitchApp {
     }
 }
 
-Export-ModuleMember -Function Get-CCSwitchConfigDir, Get-CCSwitchStatus, Install-CCSwitch, Start-CCSwitchApp
+Export-ModuleMember -Function Get-CCSwitchConfigDir, Get-CCSwitchStatus, Find-CCSwitchExecutable, Install-CCSwitch, Start-CCSwitchApp
