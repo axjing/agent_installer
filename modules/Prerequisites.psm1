@@ -528,4 +528,131 @@ function Ensure-ExecutionPolicy {
     } catch {}
 }
 
-Export-ModuleMember -Function Get-PrerequisitesStatus, Repair-NpmGlobalPath, Install-NodeJsAuto, Install-NodeJsWithWinget, Refresh-EnvironmentVariables, Get-NpmRegistry, Set-NpmRegistry, Ensure-ExecutionPolicy, Get-NpmExecutionTarget, Invoke-NpmSafe, Repair-NpmEnvironment
+function Install-GitAuto {
+    Write-Info ">>> 正在启动 Git 自动安装与环境自愈流程..."
+
+    # 1. 优先尝试系统包管理器 winget
+    $winget = Get-Command "winget" -ErrorAction SilentlyContinue
+    if ($winget) {
+        Write-Info "检测到 Windows 包管理器 winget，尝试静默安装 Git..."
+        try {
+            $proc = Start-Process winget -ArgumentList "install --id Git.Git -e --source winget --silent --accept-package-agreements --accept-source-agreements" -NoNewWindow -Wait -PassThru
+            if ($proc.ExitCode -eq 0) {
+                Refresh-EnvironmentVariables
+                $st = Get-PrerequisitesStatus
+                if ($st.GitInstalled) {
+                    Write-Success "通过 winget 成功自动安装 Git (v$($st.GitVersion))！"
+                    return $true
+                }
+            }
+        } catch {
+            Write-WarnMsg "调用 winget 安装 Git 遇到异常: $_"
+        }
+    }
+
+    # 2. 备用通道：从国内极速镜像源下载 64 位官方安装包进行后台静默安装
+    Write-Info "正在从高速镜像源下载 Git 官方安装包..."
+    $tempDir = Join-Path $env:TEMP "git-installer"
+    if (-not (Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir -Force | Out-Null }
+    $gitExe = Join-Path $tempDir "Git-64-bit.exe"
+
+    $gitUrls = @(
+        "https://npmmirror.com/mirrors/git-for-windows/v2.45.2.windows.1/Git-2.45.2-64-bit.exe",
+        "https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe"
+    )
+
+    $downloadSuccess = $false
+    foreach ($url in $gitUrls) {
+        try {
+            Write-Info "正在拉取: $url"
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $url -OutFile $gitExe -UseBasicParsing -TimeoutSec 40
+            if (Test-Path $gitExe) {
+                $downloadSuccess = $true
+                Write-Success "Git 安装包下载完成 ($((Get-Item $gitExe).Length / 1MB | ForEach-Object { '{0:N1} MB' -f $_ }))"
+                break
+            }
+        } catch {}
+    }
+
+    if ($downloadSuccess) {
+        Write-Info "正在执行 Git 后台静默无人值守安装 (/VERYSILENT /NORESTART)..."
+        try {
+            $p = Start-Process -FilePath $gitExe -ArgumentList "/VERYSILENT /NORESTART" -Wait -PassThru
+            if ($p.ExitCode -eq 0) {
+                $gitBin = "C:\Program Files\Git\cmd"
+                if ($env:PATH -split ";" -notcontains $gitBin) {
+                    $env:PATH = "$gitBin;$env:PATH"
+                }
+                Refresh-EnvironmentVariables
+                $st = Get-PrerequisitesStatus
+                if ($st.GitInstalled) {
+                    Write-Success "Git 静默安装成功！版本: v$($st.GitVersion)"
+                    return $true
+                }
+            }
+        } catch {
+            Write-ErrorMsg "安装 Git 失败: $_"
+        }
+    }
+
+    Write-WarnMsg "未能自动完成 Git 安装，请稍后手动前往 https://git-scm.com/ 下载安装。"
+    return $false
+}
+
+function Ensure-AllPrerequisites {
+    param(
+        [switch]$Silent
+    )
+
+    Write-Info "========================================================"
+    Write-Info "正在执行全套基础运行环境自检与自动补齐..."
+    Write-Info "========================================================"
+
+    # 1. 执行策略保障
+    Ensure-ExecutionPolicy
+
+    # 2. 清理环境配置与目录污染
+    Repair-NpmEnvironment
+
+    # 3. 自检当前状态
+    $prereqs = Get-PrerequisitesStatus
+
+    # 4. 检查并自动补齐 Node.js / npm
+    if (-not $prereqs.NodeInstalled -or -not $prereqs.NpmInstalled) {
+        Write-WarnMsg "[!] 检测到基础运行时 Node.js/npm 缺失！正在自动安装补齐..."
+        $nodeOk = Install-NodeJsAuto
+        if (-not $nodeOk) {
+            Write-ErrorMsg "[-] Node.js 自动补齐失败，无法继续安装 AI Agent！请检查网络后重试。"
+            return $false
+        }
+        $prereqs = Get-PrerequisitesStatus
+    } else {
+        Write-Success "[+] 基础运行时 Node.js (v$($prereqs.NodeVersion)) 与 npm (v$($prereqs.NpmVersion)) 已就绪"
+    }
+
+    # 5. 检查并自动修复 npm 全局 PATH
+    if (-not $prereqs.NpmPathValid) {
+        Write-WarnMsg "[!] 检测到 npm 全局 bin 目录尚未加入 PATH，正在自动修复并注入用户环境变量..."
+        Repair-NpmGlobalPath -NpmGlobalDir $prereqs.NpmGlobalPath | Out-Null
+        Refresh-EnvironmentVariables
+    } else {
+        Write-Success "[+] npm 全局环境变量 PATH 已正确配置"
+    }
+
+    # 6. 检查并自动补齐 Git (AI Agent 核心依赖)
+    if (-not $prereqs.GitInstalled) {
+        Write-WarnMsg "[!] 检测到 Git 工具缺失（Agent 克隆与插件依赖必需）！正在自动安装补齐..."
+        Install-GitAuto | Out-Null
+        $prereqs = Get-PrerequisitesStatus
+    } else {
+        Write-Success "[+] 代码版本管理 Git (v$($prereqs.GitVersion)) 已就绪"
+    }
+
+    Write-Success "========================================================"
+    Write-Success "所有基础依赖环境已全部检测并自愈补齐完毕！"
+    Write-Success "========================================================`n"
+    return $true
+}
+
+Export-ModuleMember -Function Get-PrerequisitesStatus, Repair-NpmGlobalPath, Install-NodeJsAuto, Install-NodeJsWithWinget, Refresh-EnvironmentVariables, Get-NpmRegistry, Set-NpmRegistry, Ensure-ExecutionPolicy, Get-NpmExecutionTarget, Invoke-NpmSafe, Repair-NpmEnvironment, Install-GitAuto, Ensure-AllPrerequisites

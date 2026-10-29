@@ -25,30 +25,11 @@ Import-Module (Join-Path $ModulesPath "ConfigManager.psm1") -DisableNameChecking
 Show-Banner
 Write-Info ">>> 正在启动 agent-installer 初始化部署向导..."
 
-# 1. 确保权限与策略并自愈 npm 环境
-Ensure-ExecutionPolicy
-Repair-NpmEnvironment
-
-# 2. 检查基础环境
-$prereqs = Get-PrerequisitesStatus
-if (-not $prereqs.NodeInstalled -or -not $prereqs.NpmInstalled) {
-    Write-WarnMsg "未检测到 Node.js 运行时！"
-    Write-Info "正在启动多通道全自动安装 Node.js LTS (Winget -> 官方MSI -> 免提权便携版)..."
-    $installedNode = Install-NodeJsAuto
-    if (-not $installedNode) {
-        Write-ErrorMsg "自动安装失败，请检查网络后重新运行本脚本，或前往 https://nodejs.org 手动下载安装。"
-        exit 1
-    }
-} else {
-    Write-Success "检测到 Node.js: v$($prereqs.NodeVersion), npm: v$($prereqs.NpmVersion)"
-}
-
-# 3. 检查并自动修复 npm 全局 PATH
-if (-not $prereqs.NpmPathValid) {
-    Write-Info "检测到 npm 全局包路径未在用户 PATH 中，正在自动修复..."
-    Repair-NpmGlobalPath -NpmGlobalDir $prereqs.NpmGlobalPath
-} else {
-    Write-Success "npm 全局 bin 目录已包含在当前 PATH 中。"
+# 1. 执行全套基础依赖环境自检与自愈补齐 (Node.js, npm, Git, PATH, 异常清理)
+$envReady = Ensure-AllPrerequisites
+if (-not $envReady) {
+    Write-ErrorMsg "基础运行环境未能全部就绪，无法继续安装，请检查网络后重试。"
+    exit 1
 }
 
 # 4. 配置 npm 镜像源（默认国内极速）

@@ -95,19 +95,10 @@ if ($Uninstall) {
 # 6. 静默一键安装全部 Agent
 if ($InstallAll) {
     Write-Info ">>> 正在执行一键批量安装全部受管 AI Agent..."
-    $prereqs = Get-PrerequisitesStatus
-    if (-not $prereqs.NodeInstalled -or -not $prereqs.NpmInstalled) {
-        Write-WarnMsg "未检测到 Node.js 运行时，正在启动自动安装通道..."
-        $installed = Install-NodeJsAuto
-        if (-not $installed) {
-            Write-ErrorMsg "Node.js 自动安装未完成，请手动前往 https://nodejs.org 安装后重试。"
-            return
-        }
-        $prereqs = Get-PrerequisitesStatus
-    }
-
-    if (-not $prereqs.NpmPathValid) {
-        Repair-NpmGlobalPath -NpmGlobalDir $prereqs.NpmGlobalPath
+    $envOk = Ensure-AllPrerequisites
+    if (-not $envOk) {
+        Write-ErrorMsg "基础运行环境未能全部就绪，已中止后续 Agent 安装流程。"
+        return
     }
 
     $allAgents = Get-SupportedAgents
@@ -120,6 +111,12 @@ if ($InstallAll) {
 
 # 7. 自选安装 Agent
 if ($Install -and $Agents) {
+    $envOk = Ensure-AllPrerequisites
+    if (-not $envOk) {
+        Write-ErrorMsg "基础运行环境未能全部就绪，已中止后续 Agent 安装流程。"
+        return
+    }
+
     foreach ($ag in $Agents) {
         Install-AgentPackage -AgentKey $ag.Trim()
     }
@@ -145,15 +142,22 @@ while ($true) {
 
     switch ($choice.Trim()) {
         "1" {
-            Write-Info "开始批量安装全部 AI Agent..."
-            $prereq = Get-PrerequisitesStatus
-            if (-not $prereq.NpmPathValid) {
-                Repair-NpmGlobalPath -NpmGlobalDir $prereq.NpmGlobalPath
+            Write-Info ">>> 已选择 [1. 一键全自动安装所有 AI Agent]"
+            # 核心优化：全自动自检并自动补齐所有缺失的基础环境（Node.js, npm, Git, PATH, 异常清理）
+            $envOk = Ensure-AllPrerequisites
+            if (-not $envOk) {
+                Write-ErrorMsg "基础运行环境未能全部就绪，已中止安装流程。"
+                Write-Host "`n按任意键返回主菜单..." -ForegroundColor Gray
+                $null = [System.Console]::ReadKey()
+                continue
             }
+
+            Write-Info ">>> 基础运行环境全部就绪，开始全自动批量安装所有 AI Agent..."
             $allAgents = Get-SupportedAgents
             foreach ($k in $allAgents.Keys) {
                 Install-AgentPackage -AgentKey $k
             }
+            Write-Success "全部 AI Agent 安装流程执行完毕！"
             Write-Host "`n按任意键返回主菜单..." -ForegroundColor Gray
             $null = [System.Console]::ReadKey()
         }
@@ -169,6 +173,15 @@ while ($true) {
             }
             $subChoice = Read-Host "请选择要安装/更新的 Agent 编号 (输入数字，多个可用逗号隔开)"
             $selectedIdxs = $subChoice -split ","
+
+            $envOk = Ensure-AllPrerequisites
+            if (-not $envOk) {
+                Write-ErrorMsg "基础运行环境未能全部就绪，已中止安装流程。"
+                Write-Host "`n按任意键返回主菜单..." -ForegroundColor Gray
+                $null = [System.Console]::ReadKey()
+                continue
+            }
+
             foreach ($item in $selectedIdxs) {
                 $num = 0
                 if ([int]::TryParse($item.Trim(), [ref]$num) -and $keyMap.ContainsKey($num)) {

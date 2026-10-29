@@ -62,6 +62,11 @@ Describe "4. Prerequisites and Self-healing" {
         $prereqs.NpmInstalled | Should Be $true
         $prereqs.NpmGlobalPath | Should Not BeNullOrEmpty
     }
+
+    It "Ensure-AllPrerequisites verifies and readies environment" {
+        $ok = Ensure-AllPrerequisites
+        $ok | Should Be $true
+    }
 }
 
 Describe "5. Unified Routing and Configuration Injection" {
